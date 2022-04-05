@@ -1,0 +1,157 @@
+//멀티 채팅 쓰레드 기반 서버
+#include <stdio.h>
+#include <WinSock2.h>
+#include <Windows.h>
+#include <process.h>
+#include <ws2tcpip.h>
+#define MAX_CLINT 256
+#define BUF_SIZE 1024
+void ErrorHandling(char* message);
+unsigned WINAPI HandleClnt(void* arg); //쓰레드가 호출 할 함수
+void SendAllClnt(char* message); //연결된 모든 클라이언트에게 message를 보내는 함수 
+SOCKET clntSocks[MAX_CLINT];// 연결되오있는 소켓들을 담을 소켓 배열 변수 - 임계영역 변수
+
+int clntNum = 0; //연결된 클리이언트의 수에대한 값 - 임계영역 변수
+
+//--------------- 뮤텍스 생성 코드 ------------------------------
+HANDLE hMutex; //뮤텍스의 핸들
+
+//---------------------------------------------------------------
+
+int main(int argc, char* argv[]) {
+
+	//--------------- 구조체 선언 --------------------------------
+	WSADATA wsaData;
+	SOCKET servSock, clntSock; //서버 소켓과 클라이언트 소켓 선언
+	SOCKADDR_IN servAddrIn, clntAddrIn; //서버 주소 구조체, 클라이언트 주소 구조체 선언
+	SOCKADDR_IN* pClntAddrIn = &clntAddrIn; //accept 할때 필요한 자료형 선언
+	SOCKADDR* pServAddr; //bind할때 필요한 자료형 선언
+	//---------------------------------------------------------------
+
+	//--------------- 뮤텍스 생성 코드 -----------------------------
+	hMutex = CreateMutex(0, FALSE, NULL);
+	//---------------------------------------------------------------
+
+
+
+	//--------------- 쓰레드 변수 코드 ------------------------------
+	HANDLE hThread;
+
+	//---------------- 변수 선언 ------------------------------------
+	int check = 1; //함수가 잘 작동했는지 반환값을 받아서 확인하는 변수
+	int clntSize = sizeof(clntAddrIn); //클라이언트 주소체의 크기를 담을 변수
+	char addres[BUF_SIZE];
+	//--------------------------------------------------------------
+	
+	//----------------아래부터는 서버 코드---------------------------
+	check = WSAStartup(MAKEWORD(2, 2), &wsaData); //소켓 버전 설정
+	if (check != 0)
+		ErrorHandling("WSAStartup() Error!");
+
+	memset(&servAddrIn, 0, sizeof(servAddrIn));; //구조체 초기화
+	servAddrIn.sin_family = AF_INET;
+	servAddrIn.sin_port = htons(9190);
+	inet_pton(AF_INET, "127.0.0.1", &(servAddrIn.sin_addr.s_addr));
+
+	pServAddr = (SOCKADDR*)(&servAddrIn); //형변환 후 포인터 저장
+
+	servSock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP); //소켓 생성
+	if (servSock == INVALID_SOCKET)
+		ErrorHandling("socket() error!");
+
+	check = bind(servSock, pServAddr, sizeof(servAddrIn)); //소켓에 주소 바인딩
+	if (check == SOCKET_ERROR)
+		ErrorHandling("bind() error!");
+
+	check = listen(servSock, 5); //소켓 리슨 상태로 변경
+	if (check == SOCKET_ERROR)
+		ErrorHandling("listen() error!");
+
+	while (1) {
+
+		clntSock = accept(servSock, (SOCKADDR*)pClntAddrIn, &clntSize); //클라이언트연결요청 허용
+		if (clntSock == INVALID_SOCKET)
+			ErrorHandling("accept() error!");
+
+		inet_ntop(AF_INET, &(clntAddrIn.sin_addr.s_addr), addres, BUF_SIZE);
+		printf("connected client adress : %s\n", addres);
+
+		WaitForSingleObject(hMutex, INFINITE); //쓰레드와 공유하는 변수들은 임계영역 처리
+		clntNum++;
+		clntSocks[clntNum] = clntSock;
+		ReleaseMutex(hMutex); //임계영역 끝
+
+		printf("클라이언트 추가 완료\n");
+
+		hThread = (HANDLE)_beginthreadex(NULL, 0, HandleClnt, (void*)&clntSock, 0, NULL); //쓰레드 생성 후 시작
+
+	}
+
+	closesocket(servSock);
+	WSACleanup();
+	return 0;
+
+}
+//---------------함수 정의--------------------------------
+void ErrorHandling(char* message) {
+
+	fputs(message, stderr);
+	fputc('\n', stderr);
+	exit(1);
+}
+//---------------쓰레드 함수-----------------------------
+unsigned WINAPI HandleClnt(void* arg) {
+
+	char messageBuf[BUF_SIZE]; //recv 메시지를 담을 버퍼
+	SOCKET hostSock = *((SOCKET*)arg); //인자로 받은 소켓포인터를 소켓으로 변환
+	int messLen = 0; //메시지길이 변수
+
+	while (1) {
+		
+		messLen = recv(hostSock, messageBuf, BUF_SIZE, 0); //클라이언트로부터 메시지 받음
+		
+		if (messLen < 0) { //만약 클라이언트가 종료한다고 햇을경우
+			WaitForSingleObject(hMutex, INFINITE);
+
+			for (int i = 1; i <= clntNum; i++) { //종료하기때문에 그 클라이언트소켓을 연결된 클라이언트소켓 배열에서 삭제해야함
+
+				if (hostSock == clntSocks[i]) { //만약 클라이언트 소켓배열이 쓰레드가 처리하는 소켓이라면
+
+					printf("disconnected client : %d\n", i);
+
+					while (i < clntNum) {
+
+						clntSocks[i] = clntSocks[i + 1]; //그 소켓을 기준으로 다음 소켓들을 왼쪽으로 시프트
+						i++;
+					}
+
+					clntNum--;
+
+					break;
+				}
+			}
+			ReleaseMutex(hMutex);
+			closesocket(hostSock);
+
+			return 0;
+		}
+		else { //클라이언트가 문자열을 보냇을 경우
+
+
+			SendAllClnt(messageBuf);
+		}
+
+	}
+}
+
+void SendAllClnt(char* message) {
+
+	WaitForSingleObject(hMutex, INFINITE);
+	for (int i = 1; i <= clntNum; i++) {
+
+		send(clntSocks[i], message, BUF_SIZE, 0);
+	
+	}
+	ReleaseMutex(hMutex);
+
+}
