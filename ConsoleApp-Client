@@ -70,8 +70,15 @@ unsigned WINAPI SendMsg(void* arg) {
 
 	char buff[BUF_SIZE];
 
+	printf("이름을 적어주세요:");
+
+	gets_s(buff, BUF_SIZE);
+	if (!strcmp(buff, "q") || !strcmp(buff, "Q"))
+		return 0;
+
+	send(hostSocket, buff, BUF_SIZE, 0);
+
 	while (1) {
-		printf("이름과 메시지를 적어주세요 :");
 
 		gets_s(buff, BUF_SIZE);
 		if (!strcmp(buff, "q") || !strcmp(buff, "Q"))
