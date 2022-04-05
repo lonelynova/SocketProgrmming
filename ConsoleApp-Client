@@ -1,0 +1,85 @@
+//멀티 쓰레드 기반 채팅 클라이언트
+#include <stdio.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#include <string.h>
+#include <process.h>
+#define BUF_SIZE 1024
+void ErrorHandling(char message[]);
+unsigned WINAPI SendMsg(void *arg); //쓰레드가 호출할 함수
+unsigned WINAPI RecvMsg(void *arg); //쓰레드가 호출할 함수
+
+SOCKET hostSocket; //클라이언트의 소켓 생성
+
+int main(int argc, char* argv[]) {
+
+	SOCKADDR_IN servAddr; //서버의 주소 구조체 생성
+	WSADATA wsaData; //라이브러리 호환 구조체 선언
+	HANDLE hThread1, hThread2; //쓰레드 핸들 선언
+	int addrSize = sizeof(servAddr);
+
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) //소켓 버전 2.2 설정
+		ErrorHandling("WSAData() error!");
+
+	hostSocket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP); // 호스트 소켓 생성
+
+	if (hostSocket == INVALID_SOCKET) //에러 처리
+		ErrorHandling("socket() error!");
+
+	memset(&servAddr, 0, sizeof(servAddr)); //통신할 서버 주소 구조체설정
+	servAddr.sin_family = AF_INET; //IPv4 주소 체계 사용
+	servAddr.sin_port = htons(9190); // 2번째 인자로 포트번호 설정
+
+	if (inet_pton(AF_INET, "127.0.0.1", &servAddr.sin_addr.s_addr) != 1) //통신할 서버 주소 구조체의 ip주소 할당
+		ErrorHandling("inet_pton() error!");
+
+	if(connect(hostSocket, (SOCKADDR*)&servAddr, sizeof(servAddr)) == SOCKET_ERROR)
+		ErrorHandling("connect() error!");
+
+	hThread1 = (HANDLE)_beginthreadex(NULL, 0, SendMsg, NULL, 0, NULL); //메시지 보내는 쓰레드 실행
+	hThread2 = (HANDLE)_beginthreadex(NULL, 0, RecvMsg, NULL, 0, NULL); //메시지 받는 쓰레드 실행
+
+	WaitForSingleObject(hThread1, INFINITE);
+	printf("send 쓰레드 종료\n");
+	WaitForSingleObject(hThread2, INFINITE);
+	printf("recv쓰레드 종료\n");
+
+	closesocket(hostSocket);
+	WSACleanup();
+	return 0;
+}
+//---------------함수 정의---------------------------
+void ErrorHandling(char message[]) {
+	fputs(message, stderr);
+	exit(1);
+}
+unsigned WINAPI SendMsg(void *arg) {
+
+	char buff[BUF_SIZE];
+
+	while (1) {
+		printf("이름과 메시지를 적어주세요 :");
+
+		gets_s(buff, BUF_SIZE);
+		if (!strcmp(buff, "q") || !strcmp(buff, "Q"))
+			break;
+
+		send(hostSocket, buff, BUF_SIZE, 0);
+	}
+	closesocket(hostSocket);
+	exit(1);
+}
+
+unsigned WINAPI RecvMsg(void *arg) {
+
+	char buff2[BUF_SIZE];
+
+	while (1) {
+
+		recv(hostSocket, buff2, BUF_SIZE, 0);
+
+		printf("%s\n", buff2);
+	}
+
+	return 0;
+}
