@@ -4,12 +4,16 @@
 #include <WS2tcpip.h>
 #include <string.h>
 #include <process.h>
+#include <Windows.h>
 #define BUF_SIZE 1024
 void ErrorHandling(char message[]);
-unsigned WINAPI SendMsg(void *arg); //쓰레드가 호출할 함수
-unsigned WINAPI RecvMsg(void *arg); //쓰레드가 호출할 함수
+unsigned WINAPI SendMsg(void* arg); //쓰레드가 호출할 함수
+unsigned WINAPI RecvMsg(void* arg); //쓰레드가 호출할 함수
+int check = 3 ; //쓰레드가 종료되었는지 확인하는 변수
 
 SOCKET hostSocket; //클라이언트의 소켓 생성
+fd_set recvFd, cpyRecvFd; //recv를 비동기로 처리하기위해 fdset선언
+TIMEVAL timeOut; //select timeout구조체
 
 int main(int argc, char* argv[]) {
 
@@ -17,6 +21,8 @@ int main(int argc, char* argv[]) {
 	WSADATA wsaData; //라이브러리 호환 구조체 선언
 	HANDLE hThread1, hThread2; //쓰레드 핸들 선언
 	int addrSize = sizeof(servAddr);
+
+	FD_ZERO(&recvFd); //fdset 초기화
 
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) //소켓 버전 2.2 설정
 		ErrorHandling("WSAData() error!");
@@ -33,18 +39,25 @@ int main(int argc, char* argv[]) {
 	if (inet_pton(AF_INET, "127.0.0.1", &servAddr.sin_addr.s_addr) != 1) //통신할 서버 주소 구조체의 ip주소 할당
 		ErrorHandling("inet_pton() error!");
 
-	if(connect(hostSocket, (SOCKADDR*)&servAddr, sizeof(servAddr)) == SOCKET_ERROR)
+	if (connect(hostSocket, (SOCKADDR*)&servAddr, sizeof(servAddr)) == SOCKET_ERROR)
 		ErrorHandling("connect() error!");
+
+	FD_SET(hostSocket, &recvFd);
+	timeOut.tv_sec = 2; //2초만 기다림
+	timeOut.tv_usec = 0;
 
 	hThread1 = (HANDLE)_beginthreadex(NULL, 0, SendMsg, NULL, 0, NULL); //메시지 보내는 쓰레드 실행
 	hThread2 = (HANDLE)_beginthreadex(NULL, 0, RecvMsg, NULL, 0, NULL); //메시지 받는 쓰레드 실행
 
-	WaitForSingleObject(hThread1, INFINITE);
-	printf("send 쓰레드 종료\n");
+	check = WaitForSingleObject(hThread1, INFINITE);
+
+	printf("send 쓰레드 종료, %d\n", check);
+
 	WaitForSingleObject(hThread2, INFINITE);
 	printf("recv쓰레드 종료\n");
 
-	closesocket(hostSocket);
+	closesocket(hostSocket); // 소켓 종료
+
 	WSACleanup();
 	return 0;
 }
@@ -53,7 +66,7 @@ void ErrorHandling(char message[]) {
 	fputs(message, stderr);
 	exit(1);
 }
-unsigned WINAPI SendMsg(void *arg) {
+unsigned WINAPI SendMsg(void* arg) {
 
 	char buff[BUF_SIZE];
 
@@ -66,19 +79,25 @@ unsigned WINAPI SendMsg(void *arg) {
 
 		send(hostSocket, buff, BUF_SIZE, 0);
 	}
-	closesocket(hostSocket);
-	exit(1);
+	return 0;
 }
 
-unsigned WINAPI RecvMsg(void *arg) {
+unsigned WINAPI RecvMsg(void* arg) {
 
 	char buff2[BUF_SIZE];
 
 	while (1) {
 
-		recv(hostSocket, buff2, BUF_SIZE, 0);
+		cpyRecvFd = recvFd; // recv되는 fdset을 select함수에 줄변수에 cpy
+		select(0, &cpyRecvFd, NULL, NULL, &timeOut); //cpyRecvFd에 모아진 소켓들중에 recv된것만 남기고 삭제함, 만약 recv된게 없다면 2초동안 기다리고 아래 코드 진행
 
-		printf("%s\n", buff2);
+		if (FD_ISSET(hostSocket, &cpyRecvFd)) { //만약 남은것들중에 hostSocket이 있으면 아래 코드 실행
+
+			recv(hostSocket, buff2, BUF_SIZE, 0);
+			printf("%s\n", buff2);
+		}
+		if (check == 0) //만약 send쓰레드가 끝낫다면 반복문 break
+			break;
 	}
 
 	return 0;
