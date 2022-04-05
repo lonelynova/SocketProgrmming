@@ -4,12 +4,15 @@
 #include <Windows.h>
 #include <process.h>
 #include <ws2tcpip.h>
+#include <string.h>
+#include <assert.h>
 #define MAX_CLINT 256
 #define BUF_SIZE 1024
 void ErrorHandling(char* message);
 unsigned WINAPI HandleClnt(void* arg); //쓰레드가 호출 할 함수
 void SendAllClnt(char* message); //연결된 모든 클라이언트에게 message를 보내는 함수 
 SOCKET clntSocks[MAX_CLINT];// 연결되오있는 소켓들을 담을 소켓 배열 변수 - 임계영역 변수
+char names[MAX_CLINT][BUF_SIZE]; //이름을 담을 배열
 
 int clntNum = 0; //연결된 클리이언트의 수에대한 값 - 임계영역 변수
 
@@ -103,8 +106,10 @@ void ErrorHandling(char* message) {
 unsigned WINAPI HandleClnt(void* arg) {
 
 	char messageBuf[BUF_SIZE]; //recv 메시지를 담을 버퍼
+	char realMessage[BUF_SIZE]; //sendallclnt에게 줄 이름과 함께 있는 진짜 메시지
 	SOCKET hostSock = *((SOCKET*)arg); //인자로 받은 소켓포인터를 소켓으로 변환
 	int messLen = 0; //메시지길이 변수
+	int first = 0; //첫번째 메시지인지 확인
 
 	while (1) {
 
@@ -112,7 +117,7 @@ unsigned WINAPI HandleClnt(void* arg) {
 
 		printf("받은 메시지 길이 : %d\n", messLen);
 
-		if (messLen == 0) { //만약 클라이언트가 정상 종료한다고 햇을경우
+		if (messLen == 0) { //만약 클라이언트가 종료한다고 햇을경우
 			WaitForSingleObject(hMutex, INFINITE);
 			printf("클라이언트 정상 종료대기\n");
 
@@ -125,6 +130,7 @@ unsigned WINAPI HandleClnt(void* arg) {
 					while (i < clntNum) {
 
 						clntSocks[i] = clntSocks[i + 1]; //그 소켓을 기준으로 다음 소켓들을 왼쪽으로 시프트
+						strcpy_s(names[i], BUF_SIZE, names[i + 1]); // 이름 배열도 그 이름을 기준으로 왼쪽으로 시프트
 						i++;
 					}
 
@@ -139,7 +145,7 @@ unsigned WINAPI HandleClnt(void* arg) {
 
 			return 0;
 		}
-		else if (messLen < 0) { //만약 클라이언트가 비정상 종료일경우
+		else if (messLen < 0) {
 
 			WaitForSingleObject(hMutex, INFINITE);
 			printf("클라이언트 비정상 종료대기\n");
@@ -153,6 +159,7 @@ unsigned WINAPI HandleClnt(void* arg) {
 					while (i < clntNum) {
 
 						clntSocks[i] = clntSocks[i + 1]; //그 소켓을 기준으로 다음 소켓들을 왼쪽으로 시프트
+						strcpy_s(names[i], BUF_SIZE, names[i + 1]); // 이름 배열도 그 이름을 기준으로 왼쪽으로 시프트
 						i++;
 					}
 
@@ -169,10 +176,42 @@ unsigned WINAPI HandleClnt(void* arg) {
 			return 0;
 
 		}
-		else { //클라이언트가 문자열을 보냇을 경우
+		else if (first == 0) { //클라이언트가 첫번째로 문자열을 보냇을경우 이름등록
+
+			for (int i = 1; i <= clntNum; i++) {
+
+				if (clntSocks[i] == hostSock) {
+
+					WaitForSingleObject(hMutex, INFINITE);
+					strcpy_s(names[i],BUF_SIZE,  messageBuf);
+					first++;
+					ReleaseMutex(hMutex);
+					printf("이름 등록 완료 %s, %d\n", names[i], i);
+					break;
+				}
+			}
+		} 
+		else { //클라이언트가 두번째로 문자열을 보냇을 경우
 
 
-			SendAllClnt(messageBuf);
+			for (int i = 1; i <= clntNum; i++) {
+
+				if (clntSocks[i] == hostSock) {
+
+					memset(realMessage, 0, sizeof(realMessage));
+
+					WaitForSingleObject(hMutex, INFINITE);
+
+					strcat_s(realMessage,BUF_SIZE, names[i]);
+					strcat_s(realMessage,BUF_SIZE, messageBuf);
+
+					ReleaseMutex(hMutex);
+
+					SendAllClnt(realMessage);
+
+					break;
+				}
+			}
 		}
 
 	}
