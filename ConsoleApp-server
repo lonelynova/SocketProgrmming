@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
 	int clntSize = sizeof(clntAddrIn); //클라이언트 주소체의 크기를 담을 변수
 	char addres[BUF_SIZE];
 	//--------------------------------------------------------------
-	
+
 	//----------------아래부터는 서버 코드---------------------------
 	check = WSAStartup(MAKEWORD(2, 2), &wsaData); //소켓 버전 설정
 	if (check != 0)
@@ -107,11 +107,14 @@ unsigned WINAPI HandleClnt(void* arg) {
 	int messLen = 0; //메시지길이 변수
 
 	while (1) {
-		
+
 		messLen = recv(hostSock, messageBuf, BUF_SIZE, 0); //클라이언트로부터 메시지 받음
-		
-		if (messLen < 0) { //만약 클라이언트가 종료한다고 햇을경우
+
+		printf("받은 메시지 길이 : %d\n", messLen);
+
+		if (messLen == 0) { //만약 클라이언트가 정상 종료한다고 햇을경우
 			WaitForSingleObject(hMutex, INFINITE);
+			printf("클라이언트 정상 종료대기\n");
 
 			for (int i = 1; i <= clntNum; i++) { //종료하기때문에 그 클라이언트소켓을 연결된 클라이언트소켓 배열에서 삭제해야함
 
@@ -130,10 +133,41 @@ unsigned WINAPI HandleClnt(void* arg) {
 					break;
 				}
 			}
+			printf("클라이언트 종료 끝\n");
 			ReleaseMutex(hMutex);
 			closesocket(hostSock);
 
 			return 0;
+		}
+		else if (messLen < 0) { //만약 클라이언트가 비정상 종료일경우
+
+			WaitForSingleObject(hMutex, INFINITE);
+			printf("클라이언트 비정상 종료대기\n");
+
+			for (int i = 1; i <= clntNum; i++) { //종료하기때문에 그 클라이언트소켓을 연결된 클라이언트소켓 배열에서 삭제해야함
+
+				if (hostSock == clntSocks[i]) { //만약 클라이언트 소켓배열이 쓰레드가 처리하는 소켓이라면
+
+					printf("disconnected client : %d\n", i);
+
+					while (i < clntNum) {
+
+						clntSocks[i] = clntSocks[i + 1]; //그 소켓을 기준으로 다음 소켓들을 왼쪽으로 시프트
+						i++;
+					}
+
+					clntNum--;
+
+					break;
+				}
+			}
+			
+			printf("클라이언트 종료 끝\n");
+			ReleaseMutex(hMutex);
+			closesocket(hostSock);
+
+			return 0;
+
 		}
 		else { //클라이언트가 문자열을 보냇을 경우
 
@@ -150,7 +184,7 @@ void SendAllClnt(char* message) {
 	for (int i = 1; i <= clntNum; i++) {
 
 		send(clntSocks[i], message, BUF_SIZE, 0);
-	
+
 	}
 	ReleaseMutex(hMutex);
 
